@@ -21,7 +21,7 @@ def ask_gemini_ai(text: str) -> str:
         Return only one word, do not write anything else.
         """
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.5-flash-lite",
             contents=prompt,
         )
         tag = response.text.strip()
@@ -47,10 +47,10 @@ def generate_chat_summary(messages_text: str) -> str:
         {messages_text}
         """
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.5-flash-lite",
             contents=prompt,
         )
         return response.text.strip()
     except Exception as e:
         print("Gemini API error in summary:", e)
-        return "Could not generate summary."
+        return f"Could not generate summary. Error: {str(e)}"

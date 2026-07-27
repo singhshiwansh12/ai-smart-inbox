@@ -8,6 +8,9 @@ from auth import hash_password, verify_password, create_access_token, get_curren
 from ai_service import ask_gemini_ai, generate_chat_summary
 from connection_manager import manager
 
+# Global cache to store conversation summaries
+SUMMARY_CACHE = {}
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -125,6 +128,10 @@ def get_conversation_summary(
         models.Message.conversation_id == convo.id
     ).order_by(models.Message.created_at).all()
     
+    msg_count = len(messages)
+    if convo.id in SUMMARY_CACHE and SUMMARY_CACHE[convo.id]["count"] == msg_count:
+        return {"summary": SUMMARY_CACHE[convo.id]["summary"]}
+
     # Format messages for AI
     chat_text = ""
     for m in messages:
@@ -132,6 +139,7 @@ def get_conversation_summary(
         chat_text += f"{sender_name}: {m.text}\n"
         
     summary = generate_chat_summary(chat_text)
+    SUMMARY_CACHE[convo.id] = {"count": msg_count, "summary": summary}
     return {"summary": summary}
 
 
@@ -182,7 +190,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
                 await manager.send_to_user(user_id, payload)
                 await manager.send_to_user(receiver_id, payload)
 
-                ai_tag = ask_gemini_ai(text)
+                # API Optimization: Skip AI categorization for very short messages
+                if len(text.strip()) < 15:
+                    ai_tag = "General"
+                else:
+                    ai_tag = ask_gemini_ai(text)
+                
                 new_message.ai_category = ai_tag
                 db.commit()
 
