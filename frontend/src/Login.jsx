@@ -29,7 +29,7 @@ function Login({ onLoginSuccess }) {
       localStorage.setItem('user', JSON.stringify(data.user))
       onLoginSuccess(data.user, data.access_token)
     } catch (err) {
-      setError('Server se connect nahi ho paya')
+      setError('Could not connect to server')
     }
   }
 

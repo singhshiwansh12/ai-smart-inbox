@@ -109,7 +109,7 @@ function ChatWindow({ currentUser, otherUser, socket, token }) {
   }
 
   if (!otherUser) {
-    return <div className="chat-window empty-state">Chat shuru karne ke liye ek contact chuno</div>
+    return <div className="chat-window empty-state">Select a contact to start chatting</div>
   }
   
   const filteredMessages = messages.filter(msg => {

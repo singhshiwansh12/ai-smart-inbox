@@ -16,7 +16,7 @@ function ContactsList({ token, onSelectUser, selectedUserId, onlineUsers }) {
   return (
     <div className="contacts-list">
       <h3>Contacts</h3>
-      {users.length === 0 && <p className="empty-text">Koi aur user nahi hai abhi.</p>}
+      {users.length === 0 && <p className="empty-text">No other users available.</p>}
       {users.map((user) => {
         const isOnline = onlineUsers.has(user.id) || user.is_online
         return (

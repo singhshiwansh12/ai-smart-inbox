@@ -16,9 +16,9 @@ def ask_gemini_ai(text: str) -> str:
     try:
         prompt = f"""
         Message: "{text}"
-        Is message ko classify karo in teen categories mein se ek mein:
-        "Spam", "Important", ya "General".
-        Sirf ek word return karo, kuch aur mat likhna.
+        Classify this message into one of these three categories:
+        "Spam", "Important", or "General".
+        Return only one word, do not write anything else.
         """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -36,12 +36,12 @@ def generate_chat_summary(messages_text: str) -> str:
     if not client:
         return "Gemini API key not configured."
     if not messages_text.strip():
-        return "Koi messages nahi hain summary ke liye."
+        return "No messages available for summary."
     
     try:
         prompt = f"""
-        Neeche ek chat conversation di gayi hai.
-        Is chat ka 3-4 line ka brief summary generate karo.
+        Below is a chat conversation.
+        Generate a brief 3-4 line summary of this chat.
         
         Chat:
         {messages_text}
@@ -53,4 +53,4 @@ def generate_chat_summary(messages_text: str) -> str:
         return response.text.strip()
     except Exception as e:
         print("Gemini API error in summary:", e)
-        return "Summary generate nahi ho payi."
+        return "Could not generate summary."
