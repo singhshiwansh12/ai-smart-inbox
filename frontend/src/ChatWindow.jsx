@@ -25,14 +25,22 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
     if (searchQuery.trim()) {
       url = `${BACKEND_HTTP}/conversation/${otherUser.id}/search?q=${encodeURIComponent(searchQuery)}`
       fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => res.json())
-        .then((data) => setMessages(data || []))
-        .catch((err) => console.log('Search error:', err))
-    } else {
-      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => res.json())
-        .then((data) => setMessages(data.messages || []))
-        .catch((err) => console.log('History error:', err))
+  const fetchMessages = async () => {
+    try {
+      const url = otherUser.is_group 
+        ? `${BACKEND_HTTP}/groups/${otherUser.id}/messages` 
+        : `${BACKEND_HTTP}/conversation/${otherUser.id}`
+        
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setMessages(otherUser.is_group ? data : data.messages)
+        if (!otherUser.is_group) setConversationId(data.conversation_id)
+      }
+    } catch (err) {
+      console.error(err)
     }
   }
 
@@ -41,32 +49,37 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
 
     const handleMessage = (event) => {
       const data = JSON.parse(event.data)
-
-      if (data.type === 'typing') {
-        if (otherUser && data.sender_id === otherUser.id) {
+      
+      if (data.type === 'chat' || data.type === 'group_chat') {
+        const isForThisGroup = otherUser.is_group && data.group_id === otherUser.id
+        const isForThisChat = !otherUser.is_group && (data.conversation_id === conversationId || data.sender_id === otherUser.id)
+        
+        if (isForThisGroup || isForThisChat) {
+          setMessages(prev => {
+            const exists = prev.find(m => m.id === data.id)
+            if (exists) {
+              return prev.map(m => m.id === data.id ? data : m)
+            }
+            return [...prev, data]
+          })
+          setIsTyping(false)
+        }
+      } else if (data.type === 'typing') {
+        if (!otherUser.is_group && data.sender_id === otherUser.id) {
           setIsTyping(true)
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          clearTimeout(typingTimeoutRef.current)
+          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000)
+        } else if (otherUser.is_group && data.group_id === otherUser.id) {
+          setIsTyping(true)
+          clearTimeout(typingTimeoutRef.current)
           typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000)
         }
-        return
-      }
-
-      if (data.type === 'chat') {
-        setMessages((prev) => {
-          const existingIndex = prev.findIndex((m) => m.id === data.id)
-          if (existingIndex !== -1) {
-            const updated = [...prev]
-            updated[existingIndex] = data
-            return updated
-          }
-          return [...prev, data]
-        })
       }
     }
 
     socket.addEventListener('message', handleMessage)
     return () => socket.removeEventListener('message', handleMessage)
-  }, [socket, otherUser, currentUser])
+  }, [socket, otherUser, currentUser, conversationId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -74,20 +87,27 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
 
   const sendMessage = () => {
     if (!input.trim() || !otherUser) return
-    socket.send(
-      JSON.stringify({
-        type: 'chat',
-        receiver_id: otherUser.id,
-        text: input,
-      })
-    )
+
+    const payload = {
+      type: otherUser.is_group ? "group_chat" : "chat",
+      text: input,
+    }
+    if (otherUser.is_group) {
+      payload.group_id = otherUser.id
+    } else {
+      payload.receiver_id = otherUser.id
+    }
+    socket.send(JSON.stringify(payload))
     setInput('')
   }
 
   const handleTyping = (e) => {
     setInput(e.target.value)
-    if (socket && otherUser) {
-      socket.send(JSON.stringify({ type: 'typing', receiver_id: otherUser.id }))
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const payload = { type: 'typing' }
+      if (otherUser.is_group) payload.group_id = otherUser.id
+      else payload.receiver_id = otherUser.id
+      socket.send(JSON.stringify(payload))
     }
   }
 
@@ -123,7 +143,7 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
         <div className="header-top">
           <div className="user-info">
             <button className="mobile-back-btn" onClick={onBack}>← Back</button>
-            <div className="other-username">{otherUser.username}</div>
+            <div className="other-username">{otherUser.is_group ? otherUser.name : otherUser.username}</div>
           </div>
           <div className="header-actions">
             <div className="search-bar">

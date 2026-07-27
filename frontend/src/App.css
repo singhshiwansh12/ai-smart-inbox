@@ -542,3 +542,65 @@ body {
     flex: 1;
   }
 }
+
+.create-group-btn {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.create-group-btn:hover {
+  background: #3a5bd9;
+}
+
+.create-group-form {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.create-group-form input[type="text"] {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 8px;
+  border-radius: 5px;
+}
+
+.create-group-form button {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.create-group-form button:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.member-selection {
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}

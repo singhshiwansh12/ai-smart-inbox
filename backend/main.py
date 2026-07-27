@@ -143,6 +143,67 @@ def get_conversation_summary(
     return {"summary": summary}
 
 
+@app.post("/groups", response_model=schemas.GroupOut)
+def create_group(group_data: schemas.GroupCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    new_group = models.Group(name=group_data.name, created_by=current_user.id)
+    db.add(new_group)
+    db.commit()
+    db.refresh(new_group)
+    
+    members = [models.GroupMember(group_id=new_group.id, user_id=current_user.id)]
+    for member_id in group_data.member_ids:
+        if member_id != current_user.id:
+            members.append(models.GroupMember(group_id=new_group.id, user_id=member_id))
+            
+    db.add_all(members)
+    db.commit()
+    return new_group
+
+@app.get("/groups", response_model=list[schemas.GroupOut])
+def get_user_groups(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    groups = db.query(models.Group).join(models.GroupMember).filter(models.GroupMember.user_id == current_user.id).all()
+    return groups
+
+@app.get("/groups/{group_id}/messages", response_model=list[schemas.GroupMessageOut])
+def get_group_messages(group_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    is_member = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=current_user.id).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member")
+        
+    messages = db.query(models.GroupMessage, models.User.username).join(
+        models.User, models.GroupMessage.sender_id == models.User.id
+    ).filter(models.GroupMessage.group_id == group_id).order_by(models.GroupMessage.created_at).all()
+    
+    result = []
+    for msg, uname in messages:
+        m = schemas.GroupMessageOut.model_validate(msg)
+        m.sender_name = uname
+        result.append(m)
+    return result
+
+@app.get("/groups/{group_id}/summary", response_model=schemas.SummaryResponse)
+def get_group_summary(group_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    is_member = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=current_user.id).first()
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Not a member")
+
+    messages = db.query(models.GroupMessage, models.User.username).join(
+        models.User, models.GroupMessage.sender_id == models.User.id
+    ).filter(models.GroupMessage.group_id == group_id).order_by(models.GroupMessage.created_at).all()
+
+    msg_count = len(messages)
+    cache_key = f"group_{group_id}"
+    if cache_key in SUMMARY_CACHE and SUMMARY_CACHE[cache_key]["count"] == msg_count:
+        return {"summary": SUMMARY_CACHE[cache_key]["summary"]}
+
+    chat_text = ""
+    for msg, uname in messages:
+        chat_text += f"{uname}: {msg.text}\n"
+
+    summary = generate_chat_summary(chat_text)
+    SUMMARY_CACHE[cache_key] = {"count": msg_count, "summary": summary}
+    return {"summary": summary}
+
 @app.websocket("/ws/chat/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int):
     await manager.connect(user_id, websocket)
@@ -155,14 +216,61 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             receiver_id = incoming_data.get("receiver_id")
             
             if msg_type == "typing":
-                # Forward typing status
                 await manager.send_to_user(receiver_id, {
                     "type": "typing",
-                    "sender_id": user_id
+                    "sender_id": user_id,
+                    "group_id": incoming_data.get("group_id")
                 })
                 continue
-                
+
             text = incoming_data.get("text")
+            
+            if msg_type == "group_chat":
+                group_id = incoming_data.get("group_id")
+                db = SessionLocal()
+                try:
+                    is_member = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=user_id).first()
+                    if not is_member:
+                        continue
+                        
+                    new_msg = models.GroupMessage(
+                        group_id=group_id,
+                        sender_id=user_id,
+                        text=text,
+                        ai_category="Analyzing..."
+                    )
+                    db.add(new_msg)
+                    db.commit()
+                    db.refresh(new_msg)
+                    
+                    sender_user = db.query(models.User).filter(models.User.id == user_id).first()
+                    payload = {
+                        "type": "group_chat",
+                        "id": new_msg.id,
+                        "group_id": group_id,
+                        "sender_id": user_id,
+                        "text": text,
+                        "ai_category": "Analyzing...",
+                        "sender_name": sender_user.username
+                    }
+                    
+                    members = db.query(models.GroupMember).filter_by(group_id=group_id).all()
+                    for m in members:
+                        await manager.send_to_user(m.user_id, payload)
+                        
+                    if len(text.strip()) < 15:
+                        ai_tag = "General"
+                    else:
+                        ai_tag = ask_gemini_ai(text)
+                    new_msg.ai_category = ai_tag
+                    db.commit()
+                    
+                    payload["ai_category"] = ai_tag
+                    for m in members:
+                        await manager.send_to_user(m.user_id, payload)
+                finally:
+                    db.close()
+                continue
 
             db = SessionLocal()
             try:

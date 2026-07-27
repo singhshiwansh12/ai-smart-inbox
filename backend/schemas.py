@@ -42,3 +42,27 @@ class ConversationOut(BaseModel):
 
 class SummaryResponse(BaseModel):
     summary: str
+
+class GroupCreate(BaseModel):
+    name: str
+    member_ids: list[int]
+
+class GroupOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class GroupMessageOut(BaseModel):
+    id: int
+    group_id: int
+    sender_id: int
+    text: str
+    ai_category: str
+    created_at: datetime
+    sender_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
