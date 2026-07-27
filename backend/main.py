@@ -31,8 +31,13 @@ def signup(user_data: schemas.UserSignup, db: Session = Depends(get_db)):
         password_hash=hash_password(user_data.password),
     )
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        db.commit()
+        db.refresh(new_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Username already taken")
 
     token = create_access_token({"user_id": new_user.id})
     return {"access_token": token, "user": new_user}

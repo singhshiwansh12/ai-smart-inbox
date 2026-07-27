@@ -21,7 +21,7 @@ def ask_gemini_ai(text: str) -> str:
         Return only one word, do not write anything else.
         """
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
         tag = response.text.strip()
@@ -47,7 +47,7 @@ def generate_chat_summary(messages_text: str) -> str:
         {messages_text}
         """
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
         return response.text.strip()
