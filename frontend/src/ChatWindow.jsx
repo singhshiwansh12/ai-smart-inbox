@@ -4,10 +4,11 @@ const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
-  const [activeTab, setActiveTab] = useState('All') // V2.1 feature
+  const [activeTab, setActiveTab] = useState('All')
   const [searchQuery, setSearchQuery] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [summary, setSummary] = useState(null)
+  const [conversationId, setConversationId] = useState(null)
   const bottomRef = useRef(null)
   const typingTimeoutRef = useRef(null)
 
@@ -19,24 +20,23 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
     fetchMessages()
   }, [otherUser, token])
 
-  const fetchMessages = () => {
-    if (!otherUser) return
-    let url = `${BACKEND_HTTP}/conversation/${otherUser.id}`
-    if (searchQuery.trim()) {
-      url = `${BACKEND_HTTP}/conversation/${otherUser.id}/search?q=${encodeURIComponent(searchQuery)}`
-      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   const fetchMessages = async () => {
     try {
-      const url = otherUser.is_group 
+      if (!otherUser) return;
+      let url = otherUser.is_group 
         ? `${BACKEND_HTTP}/groups/${otherUser.id}/messages` 
         : `${BACKEND_HTTP}/conversation/${otherUser.id}`
+        
+      if (searchQuery.trim() && !otherUser.is_group) {
+        url = `${BACKEND_HTTP}/conversation/${otherUser.id}/search?q=${encodeURIComponent(searchQuery)}`
+      }
         
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (res.ok) {
         const data = await res.json()
-        setMessages(otherUser.is_group ? data : data.messages)
+        setMessages(otherUser.is_group ? data : data.messages || [])
         if (!otherUser.is_group) setConversationId(data.conversation_id)
       }
     } catch (err) {
@@ -69,7 +69,7 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
           setIsTyping(true)
           clearTimeout(typingTimeoutRef.current)
           typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000)
-        } else if (otherUser.is_group && data.group_id === otherUser.id) {
+        } else if (otherUser.is_group && data.group_id === otherUser.id && data.sender_id !== currentUser.id) {
           setIsTyping(true)
           clearTimeout(typingTimeoutRef.current)
           typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000)
@@ -119,13 +119,23 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
     if (e.key === 'Enter') fetchMessages()
   }
   
-  const getSummary = () => {
-    fetch(`${BACKEND_HTTP}/conversation/${otherUser.id}/summary`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-      .then((res) => res.json())
-      .then((data) => setSummary(data.summary))
-      .catch((err) => console.log('Summary error:', err))
+  const getSummary = async () => {
+    try {
+      const url = otherUser.is_group
+        ? `${BACKEND_HTTP}/groups/${otherUser.id}/summary`
+        : `${BACKEND_HTTP}/conversation/${otherUser.id}/summary`
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setSummary(data.summary)
+      } else {
+        setSummary("Could not generate summary.")
+      }
+    } catch (err) {
+      console.log('Summary error:', err)
+    }
   }
 
   if (!otherUser) {
@@ -146,20 +156,21 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
             <div className="other-username">{otherUser.is_group ? otherUser.name : otherUser.username}</div>
           </div>
           <div className="header-actions">
-            <div className="search-bar">
-              <input 
-                placeholder="Search chat..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={handleSearch}
-              />
-              <button onClick={fetchMessages}>🔍</button>
-            </div>
+            {!otherUser.is_group && (
+              <div className="search-bar">
+                <input 
+                  placeholder="Search chat..." 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={handleSearch}
+                />
+                <button onClick={fetchMessages}>🔍</button>
+              </div>
+            )}
             <button className="summary-btn" onClick={getSummary}>✨ AI Summary</button>
           </div>
         </div>
         
-        {/* V2.1 Tabs */}
         <div className="tabs">
           {['All', 'Important', 'General', 'Spam'].map(tab => (
             <button 
@@ -191,12 +202,15 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
             }`}
           >
             <div className="bubble-header">
+              {otherUser.is_group && msg.sender_id !== currentUser.id && (
+                <span style={{fontSize: '0.75rem', opacity: 0.8, marginRight: '8px'}}>{msg.sender_name}</span>
+              )}
               <span className="tag-label">{msg.ai_category}</span>
             </div>
             <p>{msg.text}</p>
           </div>
         ))}
-        {isTyping && <div className="typing-indicator">{otherUser.username} is typing...</div>}
+        {isTyping && <div className="typing-indicator">Someone is typing...</div>}
         <div ref={bottomRef} />
       </div>
 
