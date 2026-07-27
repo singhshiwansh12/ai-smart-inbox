@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-function ChatWindow({ currentUser, otherUser, socket, token }) {
+function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [activeTab, setActiveTab] = useState('All') // V2.1 feature
@@ -121,7 +121,10 @@ function ChatWindow({ currentUser, otherUser, socket, token }) {
     <div className="chat-panel">
       <div className="chat-header">
         <div className="header-top">
-          <div className="other-username">{otherUser.username}</div>
+          <div className="user-info">
+            <button className="mobile-back-btn" onClick={onBack}>← Back</button>
+            <div className="other-username">{otherUser.username}</div>
+          </div>
           <div className="header-actions">
             <div className="search-bar">
               <input 

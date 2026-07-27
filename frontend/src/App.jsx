@@ -69,12 +69,16 @@ function App() {
     socket?.close()
   }
 
+  const handleBack = () => {
+    setSelectedUser(null)
+  }
+
   if (!currentUser) {
     return <Login onLoginSuccess={handleLoginSuccess} />
   }
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${selectedUser ? 'show-chat' : 'show-contacts'}`}>
       <div className="sidebar">
         <div className="user-header">
           <strong>{currentUser.username}</strong>
@@ -93,6 +97,7 @@ function App() {
         otherUser={selectedUser}
         socket={socket}
         token={token}
+        onBack={handleBack}
       />
     </div>
   )
