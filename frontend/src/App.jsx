@@ -3,7 +3,7 @@ import Login from './Login.jsx'
 import ContactsList from './ContactsList.jsx'
 import ChatWindow from './ChatWindow.jsx'
 
-const BACKEND_WS = 'ws://localhost:8000/ws/chat'
+const BACKEND_WS = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8000/ws/chat'
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null)

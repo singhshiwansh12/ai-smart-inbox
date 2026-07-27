@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-const BACKEND_HTTP = 'http://localhost:8000'
+const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 function ContactsList({ token, onSelectUser, selectedUserId, onlineUsers }) {
   const [users, setUsers] = useState([])

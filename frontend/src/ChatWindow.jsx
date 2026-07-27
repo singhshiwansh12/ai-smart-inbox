@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-const BACKEND_HTTP = 'http://localhost:8000'
+const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 function ChatWindow({ currentUser, otherUser, socket, token }) {
   const [messages, setMessages] = useState([])

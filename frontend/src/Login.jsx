@@ -1,5 +1,5 @@
 import { useState } from 'react'
-const BACKEND_HTTP = 'http://localhost:8000'
+const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 function Login({ onLoginSuccess }) {
   const [isSignup, setIsSignup] = useState(false)
