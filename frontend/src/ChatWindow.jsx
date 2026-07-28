@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
+function ChatWindow({ currentUser, otherUser, socketRef, socketTick, token, onBack }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [activeTab, setActiveTab] = useState('All')
@@ -13,14 +13,22 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
   const bottomRef = useRef(null)
   const typingTimeoutRef = useRef(null)
 
+  // Helper: get current open socket (always fresh via ref)
+  const getSocket = () => {
+    const ws = socketRef?.current
+    if (ws && ws.readyState === WebSocket.OPEN) return ws
+    return null
+  }
+
   useEffect(() => {
     if (!otherUser) return
     setActiveTab('All')
     setSummary(null)
     setSearchQuery('')
     setMessages([])
+    setConversationId(null)
     fetchMessages()
-  }, [otherUser, token])
+  }, [otherUser])
 
   const fetchMessages = async () => {
     try {
@@ -43,63 +51,68 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
         if (!otherUser.is_group) setConversationId(data.conversation_id)
       }
     } catch (err) {
-      console.error(err)
+      console.error('fetchMessages error:', err)
     } finally {
       setIsLoading(false)
     }
   }
 
+  // Re-attach message listener whenever socket changes (socketTick changes when socket reconnects)
   useEffect(() => {
-    if (!socket) return
+    const ws = socketRef?.current
+    if (!ws) return
 
     const handleMessage = (event) => {
-      const data = JSON.parse(event.data)
+      try {
+        const data = JSON.parse(event.data)
 
-      if (data.type === 'chat' || data.type === 'group_chat') {
-        const isForThisGroup = otherUser?.is_group && data.group_id === otherUser.id
-        const isForThisChat = !otherUser?.is_group && (
-          data.conversation_id === conversationId || data.sender_id === otherUser?.id
-        )
+        if (data.type === 'chat' || data.type === 'group_chat') {
+          const isForThisGroup = otherUser?.is_group && Number(data.group_id) === Number(otherUser.id)
+          const isForThisChat = !otherUser?.is_group && (
+            data.conversation_id === conversationId || Number(data.sender_id) === Number(otherUser?.id)
+          )
 
-        if (isForThisGroup || isForThisChat) {
-          setMessages(prev => {
-            // Replace optimistic temp message or update existing with new AI tag
-            const exists = prev.find(m => m.id === data.id || m.tempId === data.id)
-            if (exists) {
-              return prev.map(m => (m.id === data.id || m.tempId === data.id) ? { ...data, _updated: true } : m)
-            }
-            return [...prev, data]
-          })
-          setIsTyping(false)
+          if (isForThisGroup || isForThisChat) {
+            setMessages(prev => {
+              const exists = prev.find(m => m.id === data.id || m.tempId === String(data.id))
+              if (exists) {
+                return prev.map(m => (m.id === data.id || m.tempId === String(data.id)) ? { ...data, _updated: true } : m)
+              }
+              return [...prev, data]
+            })
+            setIsTyping(false)
+          }
+        } else if (data.type === 'typing') {
+          const isFromGroup = otherUser?.is_group && Number(data.group_id) === Number(otherUser.id) && data.sender_id !== currentUser.id
+          const isFromUser = !otherUser?.is_group && Number(data.sender_id) === Number(otherUser?.id)
+          if (isFromGroup || isFromUser) {
+            setIsTyping(true)
+            clearTimeout(typingTimeoutRef.current)
+            typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 3000)
+          }
         }
-      } else if (data.type === 'typing') {
-        const isFromGroup = otherUser?.is_group && data.group_id === otherUser.id && data.sender_id !== currentUser.id
-        const isFromUser = !otherUser?.is_group && data.sender_id === otherUser?.id
-        if (isFromGroup || isFromUser) {
-          setIsTyping(true)
-          clearTimeout(typingTimeoutRef.current)
-          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 3000)
-        }
-      } else if (data.type === 'error') {
-        // Mark failed optimistic messages
-        setMessages(prev => prev.map(m =>
-          m.status === 'sending' ? { ...m, status: 'failed' } : m
-        ))
+      } catch (e) {
+        console.error('WS message parse error:', e)
       }
     }
 
-    socket.addEventListener('message', handleMessage)
-    return () => socket.removeEventListener('message', handleMessage)
-  }, [socket, otherUser, currentUser, conversationId])
+    ws.addEventListener('message', handleMessage)
+    return () => ws.removeEventListener('message', handleMessage)
+  }, [socketTick, otherUser, currentUser, conversationId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
 
   const sendMessage = () => {
-    if (!input.trim() || !otherUser || !socket) return
+    if (!input.trim() || !otherUser) return
 
-    // Optimistic UI — show message instantly before server confirms
+    const ws = getSocket()
+    if (!ws) {
+      console.warn('Socket not open, cannot send message')
+      return
+    }
+
     const tempId = `temp-${Date.now()}`
     const optimisticMsg = {
       id: tempId,
@@ -110,6 +123,7 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
       created_at: new Date().toISOString(),
       status: 'sending',
       sender_name: currentUser.username,
+      group_id: otherUser.is_group ? otherUser.id : undefined,
     }
     setMessages(prev => [...prev, optimisticMsg])
 
@@ -121,17 +135,18 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
     if (otherUser.is_group) payload.group_id = otherUser.id
     else payload.receiver_id = otherUser.id
 
-    socket.send(JSON.stringify(payload))
+    ws.send(JSON.stringify(payload))
     setInput('')
   }
 
   const handleTyping = (e) => {
     setInput(e.target.value)
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    const ws = getSocket()
+    if (ws) {
       const payload = { type: 'typing' }
       if (otherUser.is_group) payload.group_id = otherUser.id
       else payload.receiver_id = otherUser.id
-      socket.send(JSON.stringify(payload))
+      ws.send(JSON.stringify(payload))
     }
   }
 
@@ -148,9 +163,7 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
       const url = otherUser.is_group
         ? `${BACKEND_HTTP}/groups/${otherUser.id}/summary`
         : `${BACKEND_HTTP}/conversation/${otherUser.id}/summary`
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       if (res.ok) {
         const data = await res.json()
         setSummary(data.summary)
@@ -173,7 +186,6 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
     )
   }
 
-  // useMemo prevents re-filtering on every render
   const filteredMessages = useMemo(() => {
     if (activeTab === 'All') return messages
     return messages.filter(msg => msg.ai_category === activeTab)
@@ -228,7 +240,6 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
       )}
 
       <div className="chat-window">
-        {/* Loading skeleton */}
         {isLoading && (
           Array(4).fill(0).map((_, i) => (
             <div key={i} className={`bubble skeleton-bubble ${i % 2 === 0 ? 'mine' : 'theirs'}`}>
@@ -237,7 +248,6 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
           ))
         )}
 
-        {/* Empty state per tab */}
         {!isLoading && filteredMessages.length === 0 && (
           <div style={{ textAlign: 'center', opacity: 0.4, marginTop: '40px' }}>
             {activeTab === 'All'
@@ -247,14 +257,15 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
         )}
 
         {!isLoading && filteredMessages.map((msg, index) => {
-          const isMe = msg.sender_id === currentUser.id
+          const isMe = Number(msg.sender_id) === Number(currentUser.id)
+          const cat = (msg.ai_category || 'general').toLowerCase().replace('...', '')
           return (
             <div
               key={msg.id || index}
-              className={`bubble tag-${(msg.ai_category || 'general').toLowerCase().replace('...', '')} ${isMe ? 'mine' : 'theirs'} ${msg.status === 'sending' ? 'sending' : ''} ${msg.status === 'failed' ? 'failed' : ''}`}
+              className={`bubble tag-${cat} ${isMe ? 'mine' : 'theirs'} ${msg.status === 'sending' ? 'sending' : ''} ${msg.status === 'failed' ? 'failed' : ''}`}
             >
               {otherUser.is_group && !isMe && (
-                <div style={{ fontSize: '0.72rem', opacity: 0.7, marginBottom: '3px', fontWeight: 600 }}>
+                <div style={{ fontSize: '0.72rem', opacity: 0.75, marginBottom: '3px', fontWeight: 600 }}>
                   {msg.sender_name}
                 </div>
               )}
@@ -263,7 +274,7 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
                   {msg.ai_category}
                 </span>
                 {msg.status === 'sending' && <span style={{ fontSize: '0.7rem', opacity: 0.5, marginLeft: '4px' }}>⏳</span>}
-                {msg.status === 'failed' && <span style={{ fontSize: '0.7rem', color: '#ff4444', marginLeft: '4px' }}>❌ Failed</span>}
+                {msg.status === 'failed' && <span style={{ fontSize: '0.7rem', color: '#ff4444', marginLeft: '4px' }}>❌</span>}
               </div>
               <p>{msg.text}</p>
             </div>
@@ -283,9 +294,9 @@ function ChatWindow({ currentUser, otherUser, socket, token, onBack }) {
           value={input}
           onChange={handleTyping}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder={getSocket() ? 'Type a message...' : '⚠️ Reconnecting...'}
         />
-        <button onClick={sendMessage}>Send</button>
+        <button onClick={sendMessage} disabled={!getSocket()}>Send</button>
       </div>
     </div>
   )

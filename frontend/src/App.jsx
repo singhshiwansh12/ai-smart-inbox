@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Login from './Login.jsx'
 import ContactsList from './ContactsList.jsx'
 import ChatWindow from './ChatWindow.jsx'
@@ -9,11 +9,71 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [token, setToken] = useState(null)
   const [selectedUser, setSelectedUser] = useState(null)
-  const [socket, setSocket] = useState(null)
   const [onlineUsers, setOnlineUsers] = useState(new Set())
-  const [connectionStatus, setConnectionStatus] = useState('connecting') // connecting | connected | disconnected
-  const reconnectAttemptRef = useRef(0)
+  const [connectionStatus, setConnectionStatus] = useState('connecting')
+
+  // Use a ref so ChatWindow always has the LATEST socket, even after reconnect
   const socketRef = useRef(null)
+  // Keep a stable socket state for rendering triggers only
+  const [socketTick, setSocketTick] = useState(0)
+
+  const reconnectTimerRef = useRef(null)
+  const shouldReconnectRef = useRef(false)
+  const reconnectAttemptRef = useRef(0)
+
+  const connectSocket = useCallback((user, tkn) => {
+    // Clear any existing socket cleanly
+    if (socketRef.current) {
+      socketRef.current.onclose = null
+      socketRef.current.onerror = null
+      socketRef.current.close()
+    }
+
+    const ws = new WebSocket(`${BACKEND_WS}/${user.id}?token=${tkn}`)
+    socketRef.current = ws
+
+    ws.onopen = () => {
+      setConnectionStatus('connected')
+      reconnectAttemptRef.current = 0
+      setSocketTick(t => t + 1) // notify children that socket changed
+      console.log('✅ WebSocket connected')
+    }
+
+    ws.onclose = () => {
+      setConnectionStatus('disconnected')
+      console.log('❌ WebSocket disconnected')
+
+      if (!shouldReconnectRef.current) return
+
+      reconnectAttemptRef.current += 1
+      const delay = Math.min(2000 * reconnectAttemptRef.current, 30000)
+      console.log(`Reconnecting in ${delay}ms...`)
+
+      reconnectTimerRef.current = setTimeout(() => {
+        if (shouldReconnectRef.current) connectSocket(user, tkn)
+      }, delay)
+    }
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err)
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'status') {
+          setOnlineUsers((prev) => {
+            const newSet = new Set(prev)
+            if (data.is_online) newSet.add(data.user_id)
+            else newSet.delete(data.user_id)
+            return newSet
+          })
+        }
+      } catch (e) {
+        console.error('Bad WS message:', e)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const savedToken = localStorage.getItem('token')
@@ -24,57 +84,20 @@ function App() {
     }
   }, [])
 
-  // Build WebSocket with token in query string (required for backend auth)
-  const buildSocket = (user, tkn) => {
-    const ws = new WebSocket(`${BACKEND_WS}/${user.id}?token=${tkn}`)
-
-    ws.onopen = () => {
-      setConnectionStatus('connected')
-      reconnectAttemptRef.current = 0
-      console.log('✅ WebSocket connected')
-    }
-
-    ws.onclose = () => {
-      setConnectionStatus('disconnected')
-      console.log('❌ WebSocket disconnected — attempting reconnect...')
-      scheduleReconnect(user, tkn)
-    }
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      if (data.type === 'status') {
-        setOnlineUsers((prev) => {
-          const newSet = new Set(prev)
-          if (data.is_online) newSet.add(data.user_id)
-          else newSet.delete(data.user_id)
-          return newSet
-        })
-      }
-    }
-
-    socketRef.current = ws
-    setSocket(ws)
-    return ws
-  }
-
-  // Exponential backoff reconnect (max 30s delay)
-  const scheduleReconnect = (user, tkn) => {
-    reconnectAttemptRef.current += 1
-    const delay = Math.min(1000 * 2 ** reconnectAttemptRef.current, 30000)
-    console.log(`Reconnecting in ${delay / 1000}s (attempt ${reconnectAttemptRef.current})...`)
-    setTimeout(() => {
-      buildSocket(user, tkn)
-    }, delay)
-  }
-
   useEffect(() => {
     if (!currentUser || !token) return
-    const ws = buildSocket(currentUser, token)
+    shouldReconnectRef.current = true
+    connectSocket(currentUser, token)
+
     return () => {
-      ws.onclose = null // Prevent reconnect loop on intentional logout
-      ws.close()
+      shouldReconnectRef.current = false
+      clearTimeout(reconnectTimerRef.current)
+      if (socketRef.current) {
+        socketRef.current.onclose = null
+        socketRef.current.close()
+      }
     }
-  }, [currentUser, token])
+  }, [currentUser, token, connectSocket])
 
   const handleLoginSuccess = (user, accessToken) => {
     setCurrentUser(user)
@@ -82,20 +105,19 @@ function App() {
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    shouldReconnectRef.current = false
+    clearTimeout(reconnectTimerRef.current)
     if (socketRef.current) {
       socketRef.current.onclose = null
       socketRef.current.close()
+      socketRef.current = null
     }
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
     setCurrentUser(null)
     setToken(null)
     setSelectedUser(null)
-    setSocket(null)
-  }
-
-  const handleBack = () => {
-    setSelectedUser(null)
+    setConnectionStatus('connecting')
   }
 
   if (!currentUser) {
@@ -104,10 +126,9 @@ function App() {
 
   return (
     <div className={`app-layout ${selectedUser ? 'show-chat' : 'show-contacts'}`}>
-      {/* Connection status banner */}
       {connectionStatus === 'disconnected' && (
         <div className="connection-banner">
-          ⚠️ Connection lost. Reconnecting... Your messages will send once you're back online.
+          ⚠️ Connection lost. Reconnecting... Messages will send once back online.
         </div>
       )}
 
@@ -130,9 +151,10 @@ function App() {
       <ChatWindow
         currentUser={currentUser}
         otherUser={selectedUser}
-        socket={socket}
+        socketRef={socketRef}
+        socketTick={socketTick}
         token={token}
-        onBack={handleBack}
+        onBack={() => setSelectedUser(null)}
       />
     </div>
   )
