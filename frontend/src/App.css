@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
+  --primary: #6366f1;
   --primary-color: #6366f1;
   --primary-hover: #4f46e5;
   --bg-dark: #0f172a;
@@ -509,6 +510,7 @@ body {
     border: none;
   }
   
+  /* On mobile: show-chat hides sidebar, show-contacts hides chat */
   .app-layout.show-chat .sidebar {
     display: none;
   }
