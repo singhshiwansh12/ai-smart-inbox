@@ -1,14 +1,16 @@
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import engine, get_db, Base, SessionLocal
 import models
 import schemas
-from auth import hash_password, verify_password, create_access_token, get_current_user
-from ai_service import ask_gemini_ai, generate_chat_summary
+from auth import hash_password, verify_password, create_access_token, get_current_user, decode_access_token
+from ai_service import classify_message, generate_chat_summary
 from connection_manager import manager
+from sqlalchemy.exc import IntegrityError
 
-# Global cache to store conversation summaries
+# In-memory cache for summaries {conversation_id: {count, summary}}
 SUMMARY_CACHE = {}
 
 Base.metadata.create_all(bind=engine)
@@ -23,6 +25,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─────────────────────────────────────────────
+# AUTH ROUTES
+# ─────────────────────────────────────────────
+
 @app.post("/signup", response_model=schemas.TokenResponse)
 def signup(user_data: schemas.UserSignup, db: Session = Depends(get_db)):
     existing_user = db.query(models.User).filter(models.User.username == user_data.username).first()
@@ -34,7 +40,6 @@ def signup(user_data: schemas.UserSignup, db: Session = Depends(get_db)):
         password_hash=hash_password(user_data.password),
     )
     db.add(new_user)
-    from sqlalchemy.exc import IntegrityError
     try:
         db.commit()
         db.refresh(new_user)
@@ -45,6 +50,7 @@ def signup(user_data: schemas.UserSignup, db: Session = Depends(get_db)):
     token = create_access_token({"user_id": new_user.id})
     return {"access_token": token, "user": new_user}
 
+
 @app.post("/login", response_model=schemas.TokenResponse)
 def login(user_data: schemas.UserLogin, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == user_data.username).first()
@@ -54,33 +60,41 @@ def login(user_data: schemas.UserLogin, db: Session = Depends(get_db)):
     token = create_access_token({"user_id": user.id})
     return {"access_token": token, "user": user}
 
+
+# ─────────────────────────────────────────────
+# USER ROUTES
+# ─────────────────────────────────────────────
+
 @app.get("/users", response_model=list[schemas.UserOut])
 def get_all_users(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     users = db.query(models.User).filter(models.User.id != current_user.id).all()
-    # Attach online status
     for u in users:
         u.is_online = manager.is_online(u.id)
     return users
+
 
 @app.get("/online-users", response_model=list[int])
 def get_online_users():
     return manager.get_online_users()
 
+
+# ─────────────────────────────────────────────
+# CONVERSATION ROUTES
+# ─────────────────────────────────────────────
+
 def get_or_create_conversation(db: Session, user1_id: int, user2_id: int):
     a, b = sorted([user1_id, user2_id])
-
     convo = db.query(models.Conversation).filter(
         models.Conversation.user1_id == a,
         models.Conversation.user2_id == b,
     ).first()
-
     if not convo:
         convo = models.Conversation(user1_id=a, user2_id=b)
         db.add(convo)
         db.commit()
         db.refresh(convo)
-
     return convo
+
 
 @app.get("/conversation/{other_user_id}")
 def get_conversation(
@@ -89,15 +103,14 @@ def get_conversation(
     current_user: models.User = Depends(get_current_user),
 ):
     convo = get_or_create_conversation(db, current_user.id, other_user_id)
-
     messages = db.query(models.Message).filter(
         models.Message.conversation_id == convo.id
     ).order_by(models.Message.created_at).all()
-
     return {
         "conversation_id": convo.id,
         "messages": [schemas.MessageOut.model_validate(m) for m in messages],
     }
+
 
 @app.get("/conversation/{other_user_id}/search")
 def search_conversation(
@@ -107,14 +120,12 @@ def search_conversation(
     current_user: models.User = Depends(get_current_user),
 ):
     convo = get_or_create_conversation(db, current_user.id, other_user_id)
-    
-    # Simple ILIKE search for keywords
     messages = db.query(models.Message).filter(
         models.Message.conversation_id == convo.id,
         models.Message.text.ilike(f"%{q}%")
     ).order_by(models.Message.created_at).all()
-
     return [schemas.MessageOut.model_validate(m) for m in messages]
+
 
 @app.get("/conversation/{other_user_id}/summary", response_model=schemas.SummaryResponse)
 def get_conversation_summary(
@@ -123,25 +134,27 @@ def get_conversation_summary(
     current_user: models.User = Depends(get_current_user),
 ):
     convo = get_or_create_conversation(db, current_user.id, other_user_id)
-
     messages = db.query(models.Message).filter(
         models.Message.conversation_id == convo.id
     ).order_by(models.Message.created_at).all()
-    
+
     msg_count = len(messages)
     if convo.id in SUMMARY_CACHE and SUMMARY_CACHE[convo.id]["count"] == msg_count:
         return {"summary": SUMMARY_CACHE[convo.id]["summary"]}
 
-    # Format messages for AI
     chat_text = ""
     for m in messages:
         sender_name = "Me" if m.sender_id == current_user.id else "Other"
         chat_text += f"{sender_name}: {m.text}\n"
-        
+
     summary = generate_chat_summary(chat_text)
     SUMMARY_CACHE[convo.id] = {"count": msg_count, "summary": summary}
     return {"summary": summary}
 
+
+# ─────────────────────────────────────────────
+# GROUP ROUTES
+# ─────────────────────────────────────────────
 
 @app.post("/groups", response_model=schemas.GroupOut)
 def create_group(group_data: schemas.GroupCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -149,37 +162,40 @@ def create_group(group_data: schemas.GroupCreate, db: Session = Depends(get_db),
     db.add(new_group)
     db.commit()
     db.refresh(new_group)
-    
+
     members = [models.GroupMember(group_id=new_group.id, user_id=current_user.id)]
     for member_id in group_data.member_ids:
         if member_id != current_user.id:
             members.append(models.GroupMember(group_id=new_group.id, user_id=member_id))
-            
+
     db.add_all(members)
     db.commit()
     return new_group
+
 
 @app.get("/groups", response_model=list[schemas.GroupOut])
 def get_user_groups(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     groups = db.query(models.Group).join(models.GroupMember).filter(models.GroupMember.user_id == current_user.id).all()
     return groups
 
+
 @app.get("/groups/{group_id}/messages", response_model=list[schemas.GroupMessageOut])
 def get_group_messages(group_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     is_member = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=current_user.id).first()
     if not is_member:
         raise HTTPException(status_code=403, detail="Not a member")
-        
+
     messages = db.query(models.GroupMessage, models.User.username).join(
         models.User, models.GroupMessage.sender_id == models.User.id
     ).filter(models.GroupMessage.group_id == group_id).order_by(models.GroupMessage.created_at).all()
-    
+
     result = []
     for msg, uname in messages:
         m = schemas.GroupMessageOut.model_validate(msg)
         m.sender_name = uname
         result.append(m)
     return result
+
 
 @app.get("/groups/{group_id}/summary", response_model=schemas.SummaryResponse)
 def get_group_summary(group_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -204,8 +220,23 @@ def get_group_summary(group_id: int, db: Session = Depends(get_db), current_user
     SUMMARY_CACHE[cache_key] = {"count": msg_count, "summary": summary}
     return {"summary": summary}
 
+
+# ─────────────────────────────────────────────
+# WEBSOCKET — AUTHENTICATED + ASYNC AI CALL
+# ─────────────────────────────────────────────
+
 @app.websocket("/ws/chat/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    user_id: int,
+    token: str = Query(...),
+):
+    # Verify token BEFORE accepting the connection
+    payload = decode_access_token(token)
+    if payload is None or payload.get("user_id") != user_id:
+        await websocket.close(code=1008)  # 1008 = policy violation
+        return
+
     await manager.connect(user_id, websocket)
     print(f"🟢 User {user_id} online")
 
@@ -213,65 +244,89 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
         while True:
             incoming_data = await websocket.receive_json()
             msg_type = incoming_data.get("type", "chat")
-            receiver_id = incoming_data.get("receiver_id")
-            
+
             if msg_type == "typing":
-                await manager.send_to_user(receiver_id, {
-                    "type": "typing",
-                    "sender_id": user_id,
-                    "group_id": incoming_data.get("group_id")
-                })
+                target = incoming_data.get("receiver_id") or incoming_data.get("group_id")
+                if incoming_data.get("group_id"):
+                    # Notify group members of typing
+                    db = SessionLocal()
+                    try:
+                        members = db.query(models.GroupMember).filter_by(
+                            group_id=incoming_data.get("group_id")
+                        ).all()
+                        for m in members:
+                            if m.user_id != user_id:
+                                await manager.send_to_user(m.user_id, {
+                                    "type": "typing",
+                                    "sender_id": user_id,
+                                    "group_id": incoming_data.get("group_id")
+                                })
+                    finally:
+                        db.close()
+                else:
+                    await manager.send_to_user(target, {
+                        "type": "typing",
+                        "sender_id": user_id,
+                    })
                 continue
 
-            text = incoming_data.get("text")
-            
+            text = incoming_data.get("text", "")
+
+            # ── GROUP CHAT ──────────────────────────────
             if msg_type == "group_chat":
                 group_id = incoming_data.get("group_id")
                 db = SessionLocal()
                 try:
-                    is_member = db.query(models.GroupMember).filter_by(group_id=group_id, user_id=user_id).first()
+                    is_member = db.query(models.GroupMember).filter_by(
+                        group_id=group_id, user_id=user_id
+                    ).first()
                     if not is_member:
                         continue
-                        
+
                     new_msg = models.GroupMessage(
                         group_id=group_id,
                         sender_id=user_id,
                         text=text,
-                        ai_category="Analyzing..."
+                        ai_category="Analyzing...",
                     )
                     db.add(new_msg)
-                    db.commit()
-                    db.refresh(new_msg)
-                    
+                    try:
+                        db.commit()
+                        db.refresh(new_msg)
+                    except Exception:
+                        db.rollback()
+                        await websocket.send_json({"type": "error", "detail": "Message failed to save."})
+                        continue
+
                     sender_user = db.query(models.User).filter(models.User.id == user_id).first()
-                    payload = {
+                    member_rows = db.query(models.GroupMember.user_id).filter_by(group_id=group_id).all()
+                    member_ids = [r[0] for r in member_rows]
+
+                    payload_out = {
                         "type": "group_chat",
                         "id": new_msg.id,
                         "group_id": group_id,
                         "sender_id": user_id,
                         "text": text,
                         "ai_category": "Analyzing...",
-                        "sender_name": sender_user.username
+                        "sender_name": sender_user.username if sender_user else "",
+                        "created_at": new_msg.created_at.isoformat(),
                     }
-                    
-                    members = db.query(models.GroupMember).filter_by(group_id=group_id).all()
-                    for m in members:
-                        await manager.send_to_user(m.user_id, payload)
-                        
-                    if len(text.strip()) < 15:
-                        ai_tag = "General"
-                    else:
-                        ai_tag = ask_gemini_ai(text)
+                    await manager.broadcast_to_users(member_ids, payload_out)
+
+                    # AI call off the event loop (non-blocking)
+                    ai_tag = await asyncio.to_thread(classify_message, text)
                     new_msg.ai_category = ai_tag
                     db.commit()
-                    
-                    payload["ai_category"] = ai_tag
-                    for m in members:
-                        await manager.send_to_user(m.user_id, payload)
+
+                    payload_out["ai_category"] = ai_tag
+                    await manager.broadcast_to_users(member_ids, payload_out)
                 finally:
                     db.close()
                 continue
 
+            # ── 1-ON-1 CHAT ─────────────────────────────
+            receiver_id = incoming_data.get("receiver_id")
             db = SessionLocal()
             try:
                 convo = get_or_create_conversation(db, user_id, receiver_id)
@@ -283,37 +338,42 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
                     ai_category="Analyzing...",
                 )
                 db.add(new_message)
-                db.commit()
-                db.refresh(new_message)
+                try:
+                    db.commit()
+                    db.refresh(new_message)
+                except Exception:
+                    db.rollback()
+                    await websocket.send_json({"type": "error", "detail": "Message failed to save."})
+                    continue
 
-                payload = {
+                payload_out = {
                     "type": "chat",
                     "id": new_message.id,
                     "conversation_id": convo.id,
                     "sender_id": user_id,
                     "text": text,
                     "ai_category": "Analyzing...",
+                    "created_at": new_message.created_at.isoformat(),
                 }
 
-                await manager.send_to_user(user_id, payload)
-                await manager.send_to_user(receiver_id, payload)
+                await manager.send_to_user(user_id, payload_out)
+                await manager.send_to_user(receiver_id, payload_out)
 
-                # API Optimization: Skip AI categorization for very short messages
-                if len(text.strip()) < 15:
-                    ai_tag = "General"
-                else:
-                    ai_tag = ask_gemini_ai(text)
-                
+                # AI call off the event loop (non-blocking)
+                ai_tag = await asyncio.to_thread(classify_message, text)
                 new_message.ai_category = ai_tag
                 db.commit()
 
-                payload["ai_category"] = ai_tag
-                await manager.send_to_user(user_id, payload)
-                await manager.send_to_user(receiver_id, payload)
+                payload_out["ai_category"] = ai_tag
+                await manager.send_to_user(user_id, payload_out)
+                await manager.send_to_user(receiver_id, payload_out)
 
             finally:
                 db.close()
 
     except WebSocketDisconnect:
-        await manager.disconnect(user_id)
+        pass
+    finally:
+        # Always clean up — whether disconnect, error, or crash
+        manager.disconnect(user_id, websocket)
         print(f"🔴 User {user_id} offline")

@@ -604,3 +604,77 @@ body {
   font-size: 0.9rem;
   cursor: pointer;
 }
+
+/* ── Connection Status Banner ── */
+.connection-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: #e65100;
+  color: white;
+  text-align: center;
+  padding: 8px;
+  font-size: 0.85rem;
+  z-index: 9999;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
+/* ── Connection Dot in Header ── */
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.conn-dot.connected { background: #4caf50; }
+.conn-dot.disconnected { background: #f44336; }
+.conn-dot.connecting { background: #ff9800; }
+
+/* ── Skeleton Loader ── */
+.skeleton-bubble {
+  min-height: 48px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  animation: shimmer 1.5s infinite;
+  max-width: 60%;
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.1);
+  margin: 10px;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
+}
+
+/* ── Optimistic Message States ── */
+.bubble.sending {
+  opacity: 0.65;
+}
+
+.bubble.failed {
+  border: 1px solid #ff4444;
+  opacity: 0.85;
+}
+
+/* ── AI Tag Update Animation ── */
+.tag-updated {
+  animation: tagPop 0.35s ease-out;
+}
+
+@keyframes tagPop {
+  0% { transform: scale(0.7); opacity: 0.4; }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
