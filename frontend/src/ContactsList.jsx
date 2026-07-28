@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 const BACKEND_HTTP = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-function ContactsList({ token, onSelectUser, selectedUserId, onlineUsers }) {
+function ContactsList({ token, onSelectUser, selectedUser, onlineUsers }) {
   const [users, setUsers] = useState([])
   const [groups, setGroups] = useState([])
   const [isCreatingGroup, setIsCreatingGroup] = useState(false)
@@ -99,7 +99,7 @@ function ContactsList({ token, onSelectUser, selectedUserId, onlineUsers }) {
       {groups.map((group) => (
         <div
           key={`g_${group.id}`}
-          className={`contact-item ${selectedUserId === group.id ? 'active' : ''}`}
+          className={`contact-item ${selectedUser?.is_group && selectedUser?.id === group.id ? 'active' : ''}`}
           onClick={() => onSelectUser({ ...group, is_group: true })}
         >
           👥 {group.name}
@@ -113,7 +113,7 @@ function ContactsList({ token, onSelectUser, selectedUserId, onlineUsers }) {
         return (
           <div
             key={`u_${user.id}`}
-            className={`contact-item ${selectedUserId === user.id ? 'active' : ''}`}
+            className={`contact-item ${!selectedUser?.is_group && selectedUser?.id === user.id ? 'active' : ''}`}
             onClick={() => onSelectUser(user)}
           >
             {user.username} {isOnline && <span className="online-dot" title="Online">🟢</span>}

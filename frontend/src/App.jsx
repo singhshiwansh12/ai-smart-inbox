@@ -122,7 +122,7 @@ function App() {
         <ContactsList
           token={token}
           onSelectUser={setSelectedUser}
-          selectedUserId={selectedUser?.id}
+          selectedUser={selectedUser}
           onlineUsers={onlineUsers}
         />
       </div>
