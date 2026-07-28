@@ -175,6 +175,11 @@ function ChatWindow({ currentUser, otherUser, socketRef, socketTick, token, onBa
     }
   }
 
+  const filteredMessages = useMemo(() => {
+    if (activeTab === 'All') return messages
+    return messages.filter(msg => msg.ai_category === activeTab)
+  }, [messages, activeTab])
+
   if (!otherUser) {
     return (
       <div className="chat-window empty-state">
@@ -185,11 +190,6 @@ function ChatWindow({ currentUser, otherUser, socketRef, socketTick, token, onBa
       </div>
     )
   }
-
-  const filteredMessages = useMemo(() => {
-    if (activeTab === 'All') return messages
-    return messages.filter(msg => msg.ai_category === activeTab)
-  }, [messages, activeTab])
 
   return (
     <div className="chat-panel">
